@@ -12,9 +12,13 @@ A feature-rich Discord bot for playing music in voice channels, built with disco
 
 ## Commands
 
-- `-play [YouTube URL]`: Add a song to the queue and start playing if not already
+- `-play [YouTube URL or search query]`: Add a song or playlist to the queue and start playing if not already
 - `-skip`: Skip the current song
-- `-queue`: View the current song queue
+- `-pause`: Pause the current song
+- `-resume`: Resume the paused song
+- `-volume [0-100]`: Set the volume of the bot
+- `-loop [off/song/queue]`: Set the loop mode
+- `-queue`: View the current song queue and loop mode
 - `-leave`: Make the bot leave the voice channel
 
 ## Installation

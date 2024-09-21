@@ -22,6 +22,7 @@
 	"author": "Jessica Murthick <contact@jmurth.co.uk>",
 	"license": "MIT",
 	"dependencies": {
+		"@discordjs/opus": "^0.9.0",
 		"@discordjs/voice": "^0.17.0",
 		"@distube/ytdl-core": "^4.14.4",
 		"discord.js": "^14.16.2",
