@@ -1,0 +1,6 @@
+config.json
+tsconfig.tsbuildinfo
+dist
+node_modules
+yt-dlp
+cache
