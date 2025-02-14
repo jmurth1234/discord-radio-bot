@@ -130,80 +130,80 @@ async function playNextSong(guildId: string) {
 	// Get the volume for the guild or default to 1 (100%)
 	const volume = volumes.get(guildId) ?? 1;
 
-	if (fs.existsSync(cachedFilePath)) {
-		// Use the cached file
-		const resource = createAudioResource(cachedFilePath, {
-			inputType: StreamType.OggOpus,
-			inlineVolume: true,
-		});
-		resource.volume?.setVolume(volume);
-		player.play(resource);
-	} else {
-		// Download and cache the file while streaming to the player
-		const stream = ytdl(song.url, {
-			liveBuffer: 25000,
-			highWaterMark: 1024 * 1024 * 100,
-			quality: 'highestaudio',
-			filter: (format) => format.container === 'mp4',
-		});
+	try {
+		if (fs.existsSync(cachedFilePath)) {
+			// Use the cached file
+			const resource = createAudioResource(cachedFilePath, {
+				inputType: StreamType.OggOpus,
+				inlineVolume: true,
+			});
+			resource.volume?.setVolume(volume);
+			player.play(resource);
+		} else {
+			// Download and cache the file while streaming to the player
+			const stream = ytdl(song.url, {
+				liveBuffer: 25000,
+				highWaterMark: 1024 * 1024 * 100,
+				quality: 'highestaudio',
+				filter: (format) => format.container === 'mp4',
+			});
 
-		const inputStream = new PassThrough();
-		stream.pipe(inputStream);
+			const tempFilePath = path.join(cacheDir, `${videoID}_temp.ogg`);
 
-		stream.on('error', (error) => {
-			console.error('yt-dlp error:', error);
-			player.stop();
-		});
+			// Create a PassThrough stream for FFmpeg output
+			const outputStream = new PassThrough();
+			const fileStream = fs.createWriteStream(tempFilePath);
 
-		const transcodedStream = new PassThrough();
-
-		// Prepare to write to file
-		const tempFilePath = path.join(cacheDir, `${videoID}_temp.ogg`);
-
-		// Setup ffmpeg with multiple outputs
-		ffmpeg(inputStream)
-			.inputOptions(['-analyzeduration', '0'])
-			.format('ogg')
-			.audioCodec('libopus')
-			.audioBitrate('128k')
-			// Output to the transcodedStream for immediate playback
-			.output(transcodedStream)
-			// Output to file for caching
-			.output(tempFilePath)
-			.on('start', (commandLine) => {
-				console.log('Spawned FFmpeg with command: ' + commandLine);
-			})
-			.on('error', (error) => {
-				console.error('FFmpeg error:', error);
-				player.stop();
-			})
-			.on('end', () => {
-				// Rename temp file to cached file
-				fs.rename(tempFilePath, cachedFilePath, (err) => {
-					if (err) {
-						console.error('Error renaming temp file:', err);
-					} else {
-						console.log('Caching complete');
-					}
+			// Create FFmpeg process with single output
+			ffmpeg(stream)
+				.inputOptions(['-analyzeduration', '0'])
+				.format('ogg')
+				.audioCodec('libopus')
+				.audioBitrate('128k')
+				.on('error', (error) => {
+					console.error('FFmpeg error:', error);
+					outputStream.destroy();
+					fileStream.destroy();
+					void playNextSong(guildId);
+				})
+				.on('end', () => {
+					// Close streams
+					outputStream.destroy();
+					fileStream.end();
+					
+					// Rename temp file to cached file
+					fs.rename(tempFilePath, cachedFilePath, (err) => {
+						if (err) {
+							console.error('Error renaming temp file:', err);
+						} else {
+							console.log('Caching complete');
+						}
+					});
+				})
+				.pipe(outputStream)
+				.on('data', (chunk) => {
+					// Write to both streams
+					// outputStream.write(chunk);
+					fileStream.write(chunk);
+				})
+				.on('end', () => {
+					outputStream.end();
+					fileStream.end();
 				});
-			})
-			.run();
+			
+			// Create the audio resource from the FFmpeg stream
+			const resource = createAudioResource(outputStream, {
+				inputType: StreamType.OggOpus,
+				inlineVolume: true,
+			});
+			resource.volume?.setVolume(volume);
 
-		// Handle transcoded stream errors
-		transcodedStream.on('error', (error) => {
-			console.error('Transcoded stream error:', error);
-			player.stop();
-		});
-
-		// Create the audio resource from the transcoded stream
-		const resource = createAudioResource(transcodedStream, {
-			inputType: StreamType.OggOpus,
-			inlineVolume: true,
-		});
-		resource.volume?.setVolume(volume);
-
-		// Play the resource
-		player.play(resource);
+			// Play the resource
+			player.play(resource);
+		}
+	} catch (error) {
+		console.error('Error during playback:', error);
+		void playNextSong(guildId);
 	}
 }
 
@@ -258,6 +258,8 @@ client.on(Events.MessageCreate, async (message) => {
 
 	const args = message.content.slice(prefix.length).trim().split(/ +/);
 	const command = args.shift()?.toLowerCase();
+	
+	console.log(`${message.author.username} used command: ${command}`);
 
 	// Check if the user is in the same voice channel as the bot
 	if (
@@ -373,8 +375,15 @@ client.on(Events.MessageCreate, async (message) => {
 	if (command === 'skip') {
 		const player = players.get(message.guild.id);
 		if (player && player.state.status !== AudioPlayerStatus.Idle) {
-			player.stop();
-			await message.reply('Skipped the current song.');
+			try {
+				// Stop the current playback - this will trigger the 'idle' state
+				// which will automatically play the next song
+				player.stop(true);
+				await message.reply('Skipped the current song.');
+			} catch (error) {
+				console.error('Error during skip:', error);
+				await message.reply('Failed to skip the current song.');
+			}
 		} else {
 			await message.reply('No song is currently playing.');
 		}
