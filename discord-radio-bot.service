@@ -1,0 +1,27 @@
+[Unit]
+Description=Discord Radio Bot - A feature-rich Discord bot for playing music
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=%h/discord-radio-bot
+ExecStart=%h/discord-radio-bot/start-prod.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=NODE_ENV=production
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/discord-radio-bot
+
+[Install]
+WantedBy=default.target
