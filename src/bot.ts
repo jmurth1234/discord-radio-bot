@@ -12,14 +12,7 @@ import {
 	joinVoiceChannel,
 } from '@discordjs/voice';
 import ytdl from '@distube/ytdl-core';
-import {
-	Client,
-	Events,
-	GatewayIntentBits,
-	GuildMember,
-	User,
-	type VoiceBasedChannel,
-} from 'discord.js';
+import { Client, Events, GatewayIntentBits, GuildMember, User, type VoiceBasedChannel } from 'discord.js';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
 import path from 'path';
@@ -170,7 +163,7 @@ async function playNextSong(guildId: string) {
 					// Close streams
 					outputStream.destroy();
 					fileStream.end();
-					
+
 					// Rename temp file to cached file
 					fs.rename(tempFilePath, cachedFilePath, (err) => {
 						if (err) {
@@ -190,7 +183,7 @@ async function playNextSong(guildId: string) {
 					outputStream.end();
 					fileStream.end();
 				});
-			
+
 			// Create the audio resource from the FFmpeg stream
 			const resource = createAudioResource(outputStream, {
 				inputType: StreamType.OggOpus,
@@ -258,7 +251,7 @@ client.on(Events.MessageCreate, async (message) => {
 
 	const args = message.content.slice(prefix.length).trim().split(/ +/);
 	const command = args.shift()?.toLowerCase();
-	
+
 	console.log(`${message.author.username} used command: ${command}`);
 
 	// Check if the user is in the same voice channel as the bot
@@ -451,14 +444,13 @@ client.on(Events.MessageCreate, async (message) => {
 	if (command === 'queue') {
 		const queue = queues.get(message.guild.id);
 		if (queue && (queue.length > 0 || currentSongs.get(message.guild.id) !== undefined)) {
-			const formatSong = (song: { title: string; requester: User }) => `**${song.title}** (requested by ${song.requester.username})`
+			const formatSong = (song: { title: string; requester: User }) =>
+				`**${song.title}** (requested by ${song.requester.username})`;
 			let queueString = `__Now Playing__ \n\n${formatSong(currentSongs.get(message.guild.id)!)}\n\n__Queue:__\n\n`;
-			
+
 			queueString += queue
 				.slice(0, 10) // Limit to first 10 songs to prevent long messages
-				.map(
-					(song, index) => `${index + 1}. ${formatSong(song)}`
-				)
+				.map((song, index) => `${index + 1}. ${formatSong(song)}`)
 				.join('\n');
 
 			queueString += `\n\n__Loop Mode:__ ${loopModes.get(message.guild.id) || 'off'}`;
