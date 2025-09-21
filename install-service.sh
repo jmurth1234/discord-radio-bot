@@ -54,7 +54,7 @@ print_info "Starting Discord Radio Bot systemd service installation..."
 
 # Install dependencies
 print_info "Installing dependencies..."
-yarn install --production
+yarn install
 
 # Build the project
 print_info "Building the project..."
