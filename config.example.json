@@ -1,4 +1,5 @@
 {
 	"token": "",
-	"maxTransmissionGap": 5000
+	"maxTransmissionGap": 5000,
+	"maxCacheSizeMB": 1024
 }

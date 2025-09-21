@@ -20,11 +20,12 @@ import { PassThrough } from 'stream';
 import { Video, YouTube } from 'youtube-sr'; // Import for search and playlist support
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-const { token, maxTransmissionGap } = require('../config.json') as {
+const { token, maxTransmissionGap, maxCacheSizeMB } = require('../config.json') as {
 	token: string;
 	device: string;
 	type: string;
 	maxTransmissionGap: number;
+	maxCacheSizeMB?: number;
 };
 
 // Create cache directory if it doesn't exist
@@ -33,6 +34,11 @@ if (!fs.existsSync(cacheDir)) {
 	fs.mkdirSync(cacheDir);
 }
 
+// Cache maintenance configuration
+const CACHE_MAINTENANCE_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+const TEMP_FILE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_CACHE_SIZE_BYTES = Math.max(0, Math.floor((maxCacheSizeMB ?? 1024) * 1024 * 1024));
+
 // Maps to store per-guild connections, players, and queues
 const connections = new Map<string, any>();
 const players = new Map<string, AudioPlayer>();
@@ -40,6 +46,103 @@ const queues = new Map<string, { url: string; requester: User; title: string }[]
 const volumes = new Map<string, number>(); // Store volume levels per guild
 const loopModes = new Map<string, 'off' | 'song' | 'queue'>(); // Loop mode per guild
 const currentSongs = new Map<string, { url: string; requester: User; title: string }>(); // Currently playing song per guild
+const cachingTasks = new Map<string, Promise<void>>(); // Track background caching by videoId
+
+function getVideoIdFromFilename(filename: string): string | null {
+    if (!filename.endsWith('.ogg')) return null;
+    const base = path.basename(filename, '.ogg');
+    const id = base.replace('_temp', '');
+    // Basic sanity for YouTube IDs (11 chars of allowed charset)
+    return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+}
+
+function getCurrentlyInUseVideoIds(): Set<string> {
+    const inUse = new Set<string>();
+    for (const [, song] of currentSongs) {
+        try {
+            const id = ytdl.getVideoID(song.url);
+            if (id) inUse.add(id);
+        } catch {}
+    }
+    return inUse;
+}
+
+function cleanupTempFiles() {
+    const now = Date.now();
+    const entries = fs.readdirSync(cacheDir);
+    for (const entry of entries) {
+        if (!entry.endsWith('_temp.ogg')) continue;
+        const filePath = path.join(cacheDir, entry);
+        const videoId = getVideoIdFromFilename(entry);
+        if (videoId && cachingTasks.has(videoId)) continue; // skip active downloads
+        try {
+            const stat = fs.statSync(filePath);
+            if (now - stat.mtimeMs > TEMP_FILE_TTL_MS) {
+                fs.unlinkSync(filePath);
+                console.log(`Removed stale temp file ${entry}`);
+            }
+        } catch (error) {
+            console.error('Error during temp cleanup:', error);
+        }
+    }
+}
+
+function enforceCacheSizeLimit() {
+    if (MAX_CACHE_SIZE_BYTES <= 0) return; // disabled
+    const entries = fs.readdirSync(cacheDir);
+    const inUseIds = getCurrentlyInUseVideoIds();
+
+    const cacheFiles = entries
+        .filter((e) => e.endsWith('.ogg') && !e.endsWith('_temp.ogg'))
+        .map((e) => {
+            const filePath = path.join(cacheDir, e);
+            try {
+                const stat = fs.statSync(filePath);
+                return { filePath, stat, videoId: getVideoIdFromFilename(e) } as {
+                    filePath: string;
+                    stat: fs.Stats;
+                    videoId: string | null;
+                };
+            } catch {
+                return null;
+            }
+        })
+        .filter((x): x is { filePath: string; stat: fs.Stats; videoId: string | null } => !!x);
+
+    const totalBytes = cacheFiles.reduce((sum, f) => sum + f.stat.size, 0);
+    if (totalBytes <= MAX_CACHE_SIZE_BYTES) return;
+
+    // Sort by mtime ascending (oldest first)
+    cacheFiles.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
+
+    let bytesToFree = totalBytes - MAX_CACHE_SIZE_BYTES;
+    for (const file of cacheFiles) {
+        if (bytesToFree <= 0) break;
+        if (file.videoId && (inUseIds.has(file.videoId) || cachingTasks.has(file.videoId))) {
+            continue; // don't delete the file currently in use or being cached
+        }
+        try {
+            fs.unlinkSync(file.filePath);
+            bytesToFree -= file.stat.size;
+            console.log(`Deleted cached file to enforce size: ${path.basename(file.filePath)}`);
+        } catch (error) {
+            console.error('Error deleting cached file:', error);
+        }
+    }
+}
+
+function runCacheMaintenance() {
+    try {
+        cleanupTempFiles();
+    } catch (error) {
+        console.error('Cache maintenance (temp) error:', error);
+    }
+    try {
+        enforceCacheSizeLimit();
+    } catch (error) {
+        console.error('Cache maintenance (size) error:', error);
+    }
+}
 
 function getPlayer(guildId: string) {
 	let player = players.get(guildId);
@@ -82,6 +185,62 @@ async function connectToChannel(channel: VoiceBasedChannel) {
 		connection.destroy();
 		throw error;
 	}
+}
+
+// Start a background caching job for a given YouTube video if not already cached or in progress
+function startBackgroundCaching(videoID: string, url: string) {
+    const cachedFilePath = path.join(cacheDir, `${videoID}.ogg`);
+    const tempFilePath = path.join(cacheDir, `${videoID}_temp.ogg`);
+
+    if (fs.existsSync(cachedFilePath) || cachingTasks.has(videoID)) {
+        return;
+    }
+
+    const task = new Promise<void>((resolve) => {
+        try {
+            const stream = ytdl(url, {
+                liveBuffer: 25000,
+                highWaterMark: 1024 * 1024 * 100,
+                quality: 'highestaudio',
+                filter: (format) => format.container === 'mp4',
+            });
+
+            ffmpeg(stream)
+                .inputOptions(['-analyzeduration', '0'])
+                .format('ogg')
+                .audioCodec('libopus')
+                .audioBitrate('128k')
+                .on('error', (error: Error) => {
+                    console.error('FFmpeg cache error:', error);
+                    try {
+                        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                    } catch {}
+                    cachingTasks.delete(videoID);
+                    resolve();
+                })
+                .on('end', () => {
+                    fs.rename(tempFilePath, cachedFilePath, (err) => {
+                        if (err) {
+                            console.error('Error finalizing cache file:', err);
+                        } else {
+                            console.log(`Caching complete for ${videoID}`);
+                        }
+                        cachingTasks.delete(videoID);
+                        resolve();
+                    });
+                })
+                .save(tempFilePath);
+        } catch (error) {
+            console.error('Background caching setup error:', error);
+            try {
+                if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+            } catch {}
+            cachingTasks.delete(videoID);
+            resolve();
+        }
+    });
+
+    cachingTasks.set(videoID, task);
 }
 
 async function playNextSong(guildId: string) {
@@ -132,66 +291,39 @@ async function playNextSong(guildId: string) {
 			});
 			resource.volume?.setVolume(volume);
 			player.play(resource);
+			// Touch the file to update mtime for LRU-like eviction
+			try {
+				const now = new Date();
+				fs.utimes(cachedFilePath, now, now, () => {});
+			} catch {}
 		} else {
-			// Download and cache the file while streaming to the player
-			const stream = ytdl(song.url, {
+			// Start a background caching job and stream separately for playback
+			startBackgroundCaching(videoID, song.url);
+
+			const liveStream = ytdl(song.url, {
 				liveBuffer: 25000,
 				highWaterMark: 1024 * 1024 * 100,
 				quality: 'highestaudio',
 				filter: (format) => format.container === 'mp4',
 			});
 
-			const tempFilePath = path.join(cacheDir, `${videoID}_temp.ogg`);
-
-			// Create a PassThrough stream for FFmpeg output
-			const outputStream = new PassThrough();
-			const fileStream = fs.createWriteStream(tempFilePath);
-
-			// Create FFmpeg process with single output
-			ffmpeg(stream)
+			const playbackOutput = new PassThrough();
+			ffmpeg(liveStream)
 				.inputOptions(['-analyzeduration', '0'])
 				.format('ogg')
 				.audioCodec('libopus')
 				.audioBitrate('128k')
 				.on('error', (error: Error) => {
-					console.error('FFmpeg error:', error);
-					outputStream.destroy();
-					fileStream.destroy();
+					console.error('FFmpeg playback error:', error);
 					void playNextSong(guildId);
 				})
-				.on('end', () => {
-					// Close streams
-					outputStream.destroy();
-					fileStream.end();
+				.pipe(playbackOutput, { end: true });
 
-					// Rename temp file to cached file
-					fs.rename(tempFilePath, cachedFilePath, (err) => {
-						if (err) {
-							console.error('Error renaming temp file:', err);
-						} else {
-							console.log('Caching complete');
-						}
-					});
-				})
-				.pipe(outputStream)
-				.on('data', (chunk: Buffer) => {
-					// Write to both streams
-					// outputStream.write(chunk);
-					fileStream.write(chunk);
-				})
-				.on('end', () => {
-					outputStream.end();
-					fileStream.end();
-				});
-
-			// Create the audio resource from the FFmpeg stream
-			const resource = createAudioResource(outputStream, {
+			const resource = createAudioResource(playbackOutput, {
 				inputType: StreamType.OggOpus,
 				inlineVolume: true,
 			});
 			resource.volume?.setVolume(volume);
-
-			// Play the resource
 			player.play(resource);
 		}
 	} catch (error) {
@@ -240,6 +372,15 @@ const client = new Client({
 
 client.on(Events.ClientReady, () => {
 	console.log('discord.js client is ready!');
+	// Run cache maintenance once on startup and then periodically
+	try {
+		runCacheMaintenance();
+	} catch {}
+	setInterval(() => {
+		try {
+			runCacheMaintenance();
+		} catch {}
+	}, CACHE_MAINTENANCE_INTERVAL_MS);
 });
 
 client.on(Events.MessageCreate, async (message) => {

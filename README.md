@@ -9,6 +9,9 @@ A feature-rich Discord bot for playing music in voice channels, built with disco
 - Skip current song
 - View current queue
 - Caching system for faster playback of previously played songs
+  - Background caching separate from live playback
+  - Periodic cleanup of stale temp files
+  - Configurable cache size cap via `maxCacheSizeMB` (default 1024 MB)
 
 ## Commands
 
@@ -32,7 +35,8 @@ A feature-rich Discord bot for playing music in voice channels, built with disco
    ```json
    {
    	"token": "YOUR_DISCORD_BOT_TOKEN",
-   	"maxTransmissionGap": 5000
+   	"maxTransmissionGap": 5000,
+   	"maxCacheSizeMB": 1024
    }
    ```
 4. Replace `YOUR_DISCORD_BOT_TOKEN` with your actual Discord bot token
