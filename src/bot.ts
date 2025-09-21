@@ -153,7 +153,7 @@ async function playNextSong(guildId: string) {
 				.format('ogg')
 				.audioCodec('libopus')
 				.audioBitrate('128k')
-				.on('error', (error) => {
+				.on('error', (error: Error) => {
 					console.error('FFmpeg error:', error);
 					outputStream.destroy();
 					fileStream.destroy();
@@ -174,7 +174,7 @@ async function playNextSong(guildId: string) {
 					});
 				})
 				.pipe(outputStream)
-				.on('data', (chunk) => {
+				.on('data', (chunk: Buffer) => {
 					// Write to both streams
 					// outputStream.write(chunk);
 					fileStream.write(chunk);
