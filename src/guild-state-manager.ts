@@ -45,7 +45,7 @@ export class GuildStateManager {
 	 */
 	public getPlayer(guildId: string): AudioPlayer {
 		const state = this.getGuildState(guildId);
-		
+
 		if (!state.player) {
 			state.player = createAudioPlayer({
 				behaviors: {
@@ -197,7 +197,7 @@ export class GuildStateManager {
 			if (state.connection) {
 				state.connection.destroy();
 			}
-			
+
 			// Stop player
 			if (state.player) {
 				state.player.stop(true);
@@ -213,7 +213,7 @@ export class GuildStateManager {
 	 */
 	public getCurrentlyPlayingVideoIds(): Set<string> {
 		const videoIds = new Set<string>();
-		
+
 		for (const [, state] of this.guildStates) {
 			if (state.currentSong) {
 				try {

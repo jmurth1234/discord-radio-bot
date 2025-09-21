@@ -14,7 +14,7 @@ export class VolumeCommand extends BaseCommand {
 
 	public async execute(context: CommandContext): Promise<void> {
 		const volumeArg = context.args[0];
-		
+
 		if (!volumeArg) {
 			await context.reply('Please provide a volume level between 0 and 100.');
 			return;
@@ -28,7 +28,7 @@ export class VolumeCommand extends BaseCommand {
 
 		const volumeDecimal = volume / 100;
 		const appliedToCurrent = this.audioManager.setVolume(context.guildId, volumeDecimal);
-		
+
 		if (appliedToCurrent) {
 			await context.reply(`Volume set to ${volume}% and applied to current playback.`);
 		} else {
@@ -48,7 +48,7 @@ export class LoopCommand extends BaseCommand {
 
 	public async execute(context: CommandContext): Promise<void> {
 		const loopArg = context.args[0]?.toLowerCase();
-		
+
 		if (!loopArg || !['off', 'song', 'queue'].includes(loopArg)) {
 			await context.reply('Please specify a loop mode: off, song, or queue.');
 			return;

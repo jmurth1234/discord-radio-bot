@@ -13,7 +13,7 @@ export class SkipCommand extends BaseCommand {
 
 	public async execute(context: CommandContext): Promise<void> {
 		const success = this.audioManager.skipCurrentSong(context.guildId);
-		
+
 		if (success) {
 			await context.reply('Skipped the current song.');
 		} else {
@@ -33,7 +33,7 @@ export class PauseCommand extends BaseCommand {
 
 	public async execute(context: CommandContext): Promise<void> {
 		const success = this.audioManager.pausePlayback(context.guildId);
-		
+
 		if (success) {
 			await context.reply('Paused the current song.');
 		} else {
@@ -53,7 +53,7 @@ export class ResumeCommand extends BaseCommand {
 
 	public async execute(context: CommandContext): Promise<void> {
 		const success = this.audioManager.resumePlayback(context.guildId);
-		
+
 		if (success) {
 			await context.reply('Resumed the current song.');
 		} else {

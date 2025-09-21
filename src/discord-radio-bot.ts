@@ -55,7 +55,7 @@ export class DiscordRadioBot {
 
 		// Initialize audio manager
 		this.audioManager = new AudioManager(this.guildStateManager, this.cacheManager);
-		
+
 		// Set up circular reference for event handling
 		this.guildStateManager.setAudioManager(this.audioManager);
 
@@ -64,9 +64,7 @@ export class DiscordRadioBot {
 		this.registerCommands();
 
 		// Set up cache manager to get currently playing video IDs
-		this.cacheManager.setCurrentlyInUseProvider(() => 
-			this.guildStateManager.getCurrentlyPlayingVideoIds()
-		);
+		this.cacheManager.setCurrentlyInUseProvider(() => this.guildStateManager.getCurrentlyPlayingVideoIds());
 
 		// Set up event handlers
 		this.setupEventHandlers();
@@ -96,13 +94,10 @@ export class DiscordRadioBot {
 
 	private registerCommands(): void {
 		// Register all commands
-		this.commandManager.registerCommand(new PlayCommand(
-			YouTubeService,
-			this.voiceManager,
-			this.guildStateManager,
-			this.audioManager
-		));
-		
+		this.commandManager.registerCommand(
+			new PlayCommand(YouTubeService, this.voiceManager, this.guildStateManager, this.audioManager),
+		);
+
 		this.commandManager.registerCommand(new SkipCommand(this.audioManager));
 		this.commandManager.registerCommand(new PauseCommand(this.audioManager));
 		this.commandManager.registerCommand(new ResumeCommand(this.audioManager));
@@ -117,7 +112,7 @@ export class DiscordRadioBot {
 	private setupEventHandlers(): void {
 		this.client.on(Events.ClientReady, () => {
 			Logger.info(`Bot ready! Logged in as ${this.client.user?.tag}`);
-			
+
 			// Start cache maintenance
 			this.cacheManager.startMaintenance();
 		});

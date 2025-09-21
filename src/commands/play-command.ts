@@ -18,7 +18,7 @@ export class PlayCommand extends BaseCommand {
 		private readonly youtubeService: typeof YouTubeService,
 		private readonly voiceManager: VoiceConnectionManager,
 		private readonly guildStateManager: GuildStateManager,
-		private readonly audioManager: AudioManager
+		private readonly audioManager: AudioManager,
 	) {
 		super();
 	}
@@ -33,7 +33,7 @@ export class PlayCommand extends BaseCommand {
 		// This will be passed from the message handler
 		const member = context as any as { member: GuildMember };
 		const voiceChannel = member.member.voice.channel;
-		
+
 		if (!voiceChannel) {
 			await context.reply('You need to be in a voice channel to play music!');
 			return;
@@ -68,7 +68,6 @@ export class PlayCommand extends BaseCommand {
 			if (playbackStatus === AudioPlayerStatus.Idle) {
 				await this.audioManager.playNextSong(context.guildId);
 			}
-
 		} catch (error) {
 			Logger.error(`Play command failed for guild ${context.guildId}`, error);
 			await context.reply(`Failed to play: ${error instanceof Error ? error.message : 'Unknown error'}`);

@@ -80,7 +80,9 @@ export class CommandManager {
 			await command.execute(context);
 		} catch (error) {
 			Logger.error(`Command execution failed: ${commandName}`, error);
-			await context.reply(`An error occurred while executing the command: ${error instanceof Error ? error.message : 'Unknown error'}`);
+			await context.reply(
+				`An error occurred while executing the command: ${error instanceof Error ? error.message : 'Unknown error'}`,
+			);
 		}
 	}
 

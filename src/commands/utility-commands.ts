@@ -60,7 +60,7 @@ export class LeaveCommand extends BaseCommand {
 
 	public async execute(context: CommandContext): Promise<void> {
 		const success = this.voiceManager.disconnectFromChannel(context.guildId);
-		
+
 		if (success) {
 			await context.reply('Left the voice channel.');
 		} else {

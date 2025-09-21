@@ -4,9 +4,10 @@
 export class Logger {
 	private static formatMessage(level: string, message: string, ...args: unknown[]): string {
 		const timestamp = new Date().toISOString();
-		const formattedArgs = args.length > 0 ? ` ${args.map(arg => 
-			typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
-		).join(' ')}` : '';
+		const formattedArgs =
+			args.length > 0
+				? ` ${args.map((arg) => (typeof arg === 'object' ? JSON.stringify(arg) : String(arg))).join(' ')}`
+				: '';
 		return `[${timestamp}] [${level}] ${message}${formattedArgs}`;
 	}
 

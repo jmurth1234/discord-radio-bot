@@ -1,9 +1,4 @@
-import {
-	VoiceConnection,
-	VoiceConnectionStatus,
-	joinVoiceChannel,
-	entersState,
-} from '@discordjs/voice';
+import { VoiceConnection, VoiceConnectionStatus, joinVoiceChannel, entersState } from '@discordjs/voice';
 import type { VoiceBasedChannel, GuildMember } from 'discord.js';
 import type { GuildStateManager } from './guild-state-manager.js';
 import { Logger } from './logger.js';
@@ -31,10 +26,10 @@ export class VoiceConnectionManager {
 
 			// Wait for the connection to be ready
 			await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-			
+
 			// Store the connection
 			this.guildStateManager.setConnection(channel.guild.id, connection);
-			
+
 			// Set up connection event handlers
 			this.setupConnectionEventHandlers(connection, channel.guild.id);
 
@@ -51,7 +46,7 @@ export class VoiceConnectionManager {
 	 */
 	public disconnectFromChannel(guildId: string): boolean {
 		const connection = this.guildStateManager.getConnection(guildId);
-		
+
 		if (connection) {
 			connection.destroy();
 			this.guildStateManager.clearGuildState(guildId);
@@ -82,7 +77,7 @@ export class VoiceConnectionManager {
 	 */
 	public isUserInSameChannel(member: GuildMember): boolean {
 		const connection = this.guildStateManager.getConnection(member.guild.id);
-		
+
 		// If bot is not connected, allow the command
 		if (!connection) {
 			return true;
@@ -97,7 +92,7 @@ export class VoiceConnectionManager {
 	 */
 	public async ensureConnection(guildId: string, channel: VoiceBasedChannel): Promise<VoiceConnection> {
 		const existingConnection = this.guildStateManager.getConnection(guildId);
-		
+
 		if (existingConnection && existingConnection.state.status !== VoiceConnectionStatus.Disconnected) {
 			return existingConnection;
 		}
@@ -108,7 +103,7 @@ export class VoiceConnectionManager {
 	private setupConnectionEventHandlers(connection: VoiceConnection, guildId: string): void {
 		connection.on('stateChange', (oldState, newState) => {
 			Logger.debug(`Voice connection state changed in guild ${guildId}: ${oldState.status} -> ${newState.status}`);
-			
+
 			if (newState.status === VoiceConnectionStatus.Disconnected) {
 				Logger.info(`Voice connection disconnected in guild ${guildId}`);
 				// Clean up guild state when disconnected

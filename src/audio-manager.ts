@@ -1,9 +1,4 @@
-import {
-	AudioResource,
-	createAudioResource,
-	StreamType,
-	AudioPlayerStatus,
-} from '@discordjs/voice';
+import { AudioResource, createAudioResource, StreamType, AudioPlayerStatus } from '@discordjs/voice';
 import ffmpeg from 'fluent-ffmpeg';
 import { PassThrough } from 'stream';
 import type { Song } from './types.js';
@@ -68,7 +63,7 @@ export class AudioManager {
 	 */
 	public skipCurrentSong(guildId: string): boolean {
 		const player = this.guildStateManager.getPlayer(guildId);
-		
+
 		if (player.state.status !== AudioPlayerStatus.Idle) {
 			player.stop(true);
 			Logger.info(`Skipped song in guild ${guildId}`);
@@ -83,7 +78,7 @@ export class AudioManager {
 	 */
 	public pausePlayback(guildId: string): boolean {
 		const player = this.guildStateManager.getPlayer(guildId);
-		
+
 		if (player.state.status === AudioPlayerStatus.Playing) {
 			player.pause();
 			Logger.info(`Paused playback in guild ${guildId}`);
@@ -98,7 +93,7 @@ export class AudioManager {
 	 */
 	public resumePlayback(guildId: string): boolean {
 		const player = this.guildStateManager.getPlayer(guildId);
-		
+
 		if (player.state.status === AudioPlayerStatus.Paused) {
 			player.unpause();
 			Logger.info(`Resumed playback in guild ${guildId}`);
@@ -113,7 +108,7 @@ export class AudioManager {
 	 */
 	public setVolume(guildId: string, volume: number): boolean {
 		this.guildStateManager.setVolume(guildId, volume);
-		
+
 		// Apply to current playback if active
 		const player = this.guildStateManager.getPlayer(guildId);
 		if (player.state.status !== AudioPlayerStatus.Idle && 'resource' in player.state) {
@@ -154,7 +149,7 @@ export class AudioManager {
 
 	private async playFromCache(player: any, videoId: string, volume: number): Promise<void> {
 		const cachedFilePath = this.cacheManager.getCachedFilePath(videoId);
-		
+
 		try {
 			const resource = createAudioResource(cachedFilePath, {
 				inputType: StreamType.OggOpus,
@@ -166,7 +161,7 @@ export class AudioManager {
 
 			// Update cache access time for LRU eviction
 			this.cacheManager.touchCachedFile(videoId);
-			
+
 			Logger.debug(`Playing from cache: ${videoId}`);
 		} catch (error) {
 			Logger.error('Failed to play from cache', error);
