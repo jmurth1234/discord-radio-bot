@@ -11,7 +11,7 @@ import {
 	entersState,
 	joinVoiceChannel,
 } from '@discordjs/voice';
-import { spawn, execSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { Client, Events, GatewayIntentBits, GuildMember, User, type VoiceBasedChannel } from 'discord.js';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
@@ -34,8 +34,12 @@ function getVideoIdFromUrl(url: string): string | null {
 
 async function getVideoInfo(url: string): Promise<{ title: string } | null> {
 	try {
-		const title = execSync(`yt-dlp --get-title --no-warnings "${url}"`, { encoding: 'utf-8' }).trim();
-		return { title };
+		const result = spawnSync('yt-dlp', ['--get-title', '--no-warnings', url], { encoding: 'utf-8' });
+		if (result.status !== 0 || !result.stdout) {
+			console.error('Error getting video info:', result.stderr);
+			return null;
+		}
+		return { title: result.stdout.trim() };
 	} catch (error) {
 		console.error('Error getting video info:', error);
 		return null;
@@ -60,6 +64,7 @@ function createYtDlpStream(url: string): PassThrough {
 	ytdlp.on('close', (code: number | null) => {
 		if (code !== 0) {
 			console.error(`yt-dlp exited with code ${code}`);
+			output.end();
 		}
 	});
 
