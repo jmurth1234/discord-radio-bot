@@ -63,6 +63,8 @@ For production deployment, you can set up the bot as a systemd user service that
 ### Prerequisites
 
 - Node.js and Yarn installed
+- FFmpeg installed
+- yt-dlp installed (https://github.com/yt-dlp/yt-dlp)
 - Systemd (available on most Linux distributions)
 - Proper `config.json` file with your Discord bot token
 
