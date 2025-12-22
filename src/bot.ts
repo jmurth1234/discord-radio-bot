@@ -11,7 +11,7 @@ import {
 	entersState,
 	joinVoiceChannel,
 } from '@discordjs/voice';
-import { spawn, spawnSync } from 'child_process';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import { Client, Events, GatewayIntentBits, GuildMember, User, type VoiceBasedChannel } from 'discord.js';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
@@ -23,6 +23,22 @@ import { Video, YouTube } from 'youtube-sr'; // Import for search and playlist s
 const YOUTUBE_URL_REGEX =
 	/^(?:https?:\/\/)?(?:(?:www|m)\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[?&].*)?$/;
 
+// Timeout for yt-dlp info fetch (in milliseconds)
+const YT_DLP_INFO_TIMEOUT_MS = 15000;
+
+// Validate yt-dlp is installed on startup
+function validateYtDlpInstalled(): void {
+	const result = spawnSync('yt-dlp', ['--version']);
+	if (result.status !== 0) {
+		console.error('yt-dlp not found - please install it: https://github.com/yt-dlp/yt-dlp');
+		process.exit(1);
+	}
+	console.log('yt-dlp version:', result.stdout?.toString().trim());
+}
+
+// Run validation on module load
+validateYtDlpInstalled();
+
 function validateYouTubeURL(url: string): boolean {
 	return YOUTUBE_URL_REGEX.test(url);
 }
@@ -33,22 +49,69 @@ function getVideoIdFromUrl(url: string): string | null {
 }
 
 async function getVideoInfo(url: string): Promise<{ title: string } | null> {
-	try {
-		const result = spawnSync('yt-dlp', ['--get-title', '--no-warnings', url], { encoding: 'utf-8' });
-		if (result.status !== 0 || !result.stdout) {
-			console.error('Error getting video info:', result.stderr);
-			return null;
-		}
-		return { title: result.stdout.trim() };
-	} catch (error) {
-		console.error('Error getting video info:', error);
-		return null;
-	}
+	return new Promise((resolve) => {
+		let resolved = false;
+		const safeResolve = (value: { title: string } | null) => {
+			if (!resolved) {
+				resolved = true;
+				clearTimeout(timeout);
+				resolve(value);
+			}
+		};
+
+		const proc = spawn('yt-dlp', ['--get-title', '--no-warnings', '--no-playlist', url]);
+		let stdout = '';
+		let stderr = '';
+
+		const timeout = setTimeout(() => {
+			proc.kill('SIGKILL');
+			console.error('yt-dlp info fetch timed out');
+			safeResolve(null);
+		}, YT_DLP_INFO_TIMEOUT_MS);
+
+		proc.stdout.on('data', (data: Buffer) => {
+			stdout += data.toString();
+		});
+
+		proc.stderr.on('data', (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on('close', (code) => {
+			if (code === 0 && stdout) {
+				safeResolve({ title: stdout.trim() });
+			} else {
+				if (stderr) console.error('Error getting video info:', stderr);
+				safeResolve(null);
+			}
+		});
+
+		proc.on('error', (error) => {
+			console.error('Error getting video info:', error);
+			safeResolve(null);
+		});
+	});
 }
 
-function createYtDlpStream(url: string): PassThrough {
-	const output = new PassThrough();
-	const ytdlp = spawn('yt-dlp', ['-f', 'bestaudio', '-o', '-', '--no-warnings', '--quiet', url]);
+interface YtDlpStream extends PassThrough {
+	ytdlpProcess?: ChildProcess;
+}
+
+function createYtDlpStream(url: string): YtDlpStream {
+	const output = new PassThrough() as YtDlpStream;
+	const ytdlp = spawn('yt-dlp', [
+		'-f',
+		'bestaudio[ext=m4a]/bestaudio',
+		'-o',
+		'-',
+		'--no-warnings',
+		'--quiet',
+		'--no-playlist',
+		url,
+	]);
+
+	// Store reference for external cleanup
+	output.ytdlpProcess = ytdlp;
 
 	ytdlp.stdout.pipe(output);
 
@@ -67,6 +130,15 @@ function createYtDlpStream(url: string): PassThrough {
 			output.end();
 		}
 	});
+
+	// Kill the yt-dlp process when the stream is closed or destroyed
+	const cleanup = () => {
+		if (!ytdlp.killed) {
+			ytdlp.kill('SIGKILL');
+		}
+	};
+	output.on('close', cleanup);
+	output.on('error', cleanup);
 
 	return output;
 }
