@@ -11,13 +11,137 @@ import {
 	entersState,
 	joinVoiceChannel,
 } from '@discordjs/voice';
-import ytdl from '@distube/ytdl-core';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import { Client, Events, GatewayIntentBits, GuildMember, User, type VoiceBasedChannel } from 'discord.js';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
 import path from 'path';
 import { PassThrough } from 'stream';
 import { Video, YouTube } from 'youtube-sr'; // Import for search and playlist support
+
+// YouTube URL validation and ID extraction using regex
+const YOUTUBE_URL_REGEX =
+	/^(?:https?:\/\/)?(?:(?:www|m)\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[?&].*)?$/;
+
+// Timeout for yt-dlp info fetch (in milliseconds)
+const YT_DLP_INFO_TIMEOUT_MS = 15000;
+
+// Validate yt-dlp is installed on startup
+function validateYtDlpInstalled(): void {
+	const result = spawnSync('yt-dlp', ['--version']);
+	if (result.status !== 0) {
+		console.error('yt-dlp not found - please install it: https://github.com/yt-dlp/yt-dlp');
+		process.exit(1);
+	}
+	console.log('yt-dlp version:', result.stdout?.toString().trim());
+}
+
+// Run validation on module load
+validateYtDlpInstalled();
+
+function validateYouTubeURL(url: string): boolean {
+	return YOUTUBE_URL_REGEX.test(url);
+}
+
+function getVideoIdFromUrl(url: string): string | null {
+	const match = url.match(YOUTUBE_URL_REGEX);
+	return match?.[1] ?? null;
+}
+
+async function getVideoInfo(url: string): Promise<{ title: string } | null> {
+	return new Promise((resolve) => {
+		let resolved = false;
+		const safeResolve = (value: { title: string } | null) => {
+			if (!resolved) {
+				resolved = true;
+				clearTimeout(timeout);
+				resolve(value);
+			}
+		};
+
+		const proc = spawn('yt-dlp', ['--get-title', '--no-warnings', '--no-playlist', url]);
+		let stdout = '';
+		let stderr = '';
+
+		const timeout = setTimeout(() => {
+			proc.kill('SIGKILL');
+			console.error('yt-dlp info fetch timed out');
+			safeResolve(null);
+		}, YT_DLP_INFO_TIMEOUT_MS);
+
+		proc.stdout.on('data', (data: Buffer) => {
+			stdout += data.toString();
+		});
+
+		proc.stderr.on('data', (data: Buffer) => {
+			stderr += data.toString();
+		});
+
+		proc.on('close', (code) => {
+			if (code === 0 && stdout) {
+				safeResolve({ title: stdout.trim() });
+			} else {
+				if (stderr) console.error('Error getting video info:', stderr);
+				safeResolve(null);
+			}
+		});
+
+		proc.on('error', (error) => {
+			console.error('Error getting video info:', error);
+			safeResolve(null);
+		});
+	});
+}
+
+interface YtDlpStream extends PassThrough {
+	ytdlpProcess?: ChildProcess;
+}
+
+function createYtDlpStream(url: string): YtDlpStream {
+	const output = new PassThrough() as YtDlpStream;
+	const ytdlp = spawn('yt-dlp', [
+		'-f',
+		'bestaudio[ext=m4a]/bestaudio',
+		'-o',
+		'-',
+		'--no-warnings',
+		'--quiet',
+		'--no-playlist',
+		url,
+	]);
+
+	// Store reference for external cleanup
+	output.ytdlpProcess = ytdlp;
+
+	ytdlp.stdout.pipe(output);
+
+	ytdlp.stderr.on('data', (data: Buffer) => {
+		console.error('yt-dlp stderr:', data.toString());
+	});
+
+	ytdlp.on('error', (error: Error) => {
+		console.error('yt-dlp spawn error:', error);
+		output.destroy(error);
+	});
+
+	ytdlp.on('close', (code: number | null) => {
+		if (code !== 0) {
+			console.error(`yt-dlp exited with code ${code}`);
+			output.end();
+		}
+	});
+
+	// Kill the yt-dlp process when the stream is closed or destroyed
+	const cleanup = () => {
+		if (!ytdlp.killed) {
+			ytdlp.kill('SIGKILL');
+		}
+	};
+	output.on('close', cleanup);
+	output.on('error', cleanup);
+
+	return output;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
 const { token, maxTransmissionGap, maxCacheSizeMB } = require('../config.json') as {
@@ -49,99 +173,97 @@ const currentSongs = new Map<string, { url: string; requester: User; title: stri
 const cachingTasks = new Map<string, Promise<void>>(); // Track background caching by videoId
 
 function getVideoIdFromFilename(filename: string): string | null {
-    if (!filename.endsWith('.ogg')) return null;
-    const base = path.basename(filename, '.ogg');
-    const id = base.replace('_temp', '');
-    // Basic sanity for YouTube IDs (11 chars of allowed charset)
-    return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+	if (!filename.endsWith('.ogg')) return null;
+	const base = path.basename(filename, '.ogg');
+	const id = base.replace('_temp', '');
+	// Basic sanity for YouTube IDs (11 chars of allowed charset)
+	return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
 }
 
 function getCurrentlyInUseVideoIds(): Set<string> {
-    const inUse = new Set<string>();
-    for (const [, song] of currentSongs) {
-        try {
-            const id = ytdl.getVideoID(song.url);
-            if (id) inUse.add(id);
-        } catch {}
-    }
-    return inUse;
+	const inUse = new Set<string>();
+	for (const [, song] of currentSongs) {
+		const id = getVideoIdFromUrl(song.url);
+		if (id) inUse.add(id);
+	}
+	return inUse;
 }
 
 function cleanupTempFiles() {
-    const now = Date.now();
-    const entries = fs.readdirSync(cacheDir);
-    for (const entry of entries) {
-        if (!entry.endsWith('_temp.ogg')) continue;
-        const filePath = path.join(cacheDir, entry);
-        const videoId = getVideoIdFromFilename(entry);
-        if (videoId && cachingTasks.has(videoId)) continue; // skip active downloads
-        try {
-            const stat = fs.statSync(filePath);
-            if (now - stat.mtimeMs > TEMP_FILE_TTL_MS) {
-                fs.unlinkSync(filePath);
-                console.log(`Removed stale temp file ${entry}`);
-            }
-        } catch (error) {
-            console.error('Error during temp cleanup:', error);
-        }
-    }
+	const now = Date.now();
+	const entries = fs.readdirSync(cacheDir);
+	for (const entry of entries) {
+		if (!entry.endsWith('_temp.ogg')) continue;
+		const filePath = path.join(cacheDir, entry);
+		const videoId = getVideoIdFromFilename(entry);
+		if (videoId && cachingTasks.has(videoId)) continue; // skip active downloads
+		try {
+			const stat = fs.statSync(filePath);
+			if (now - stat.mtimeMs > TEMP_FILE_TTL_MS) {
+				fs.unlinkSync(filePath);
+				console.log(`Removed stale temp file ${entry}`);
+			}
+		} catch (error) {
+			console.error('Error during temp cleanup:', error);
+		}
+	}
 }
 
 function enforceCacheSizeLimit() {
-    if (MAX_CACHE_SIZE_BYTES <= 0) return; // disabled
-    const entries = fs.readdirSync(cacheDir);
-    const inUseIds = getCurrentlyInUseVideoIds();
+	if (MAX_CACHE_SIZE_BYTES <= 0) return; // disabled
+	const entries = fs.readdirSync(cacheDir);
+	const inUseIds = getCurrentlyInUseVideoIds();
 
-    const cacheFiles = entries
-        .filter((e) => e.endsWith('.ogg') && !e.endsWith('_temp.ogg'))
-        .map((e) => {
-            const filePath = path.join(cacheDir, e);
-            try {
-                const stat = fs.statSync(filePath);
-                return { filePath, stat, videoId: getVideoIdFromFilename(e) } as {
-                    filePath: string;
-                    stat: fs.Stats;
-                    videoId: string | null;
-                };
-            } catch {
-                return null;
-            }
-        })
-        .filter((x): x is { filePath: string; stat: fs.Stats; videoId: string | null } => !!x);
+	const cacheFiles = entries
+		.filter((e) => e.endsWith('.ogg') && !e.endsWith('_temp.ogg'))
+		.map((e) => {
+			const filePath = path.join(cacheDir, e);
+			try {
+				const stat = fs.statSync(filePath);
+				return { filePath, stat, videoId: getVideoIdFromFilename(e) } as {
+					filePath: string;
+					stat: fs.Stats;
+					videoId: string | null;
+				};
+			} catch {
+				return null;
+			}
+		})
+		.filter((x): x is { filePath: string; stat: fs.Stats; videoId: string | null } => !!x);
 
-    const totalBytes = cacheFiles.reduce((sum, f) => sum + f.stat.size, 0);
-    if (totalBytes <= MAX_CACHE_SIZE_BYTES) return;
+	const totalBytes = cacheFiles.reduce((sum, f) => sum + f.stat.size, 0);
+	if (totalBytes <= MAX_CACHE_SIZE_BYTES) return;
 
-    // Sort by mtime ascending (oldest first)
-    cacheFiles.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
+	// Sort by mtime ascending (oldest first)
+	cacheFiles.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
 
-    let bytesToFree = totalBytes - MAX_CACHE_SIZE_BYTES;
-    for (const file of cacheFiles) {
-        if (bytesToFree <= 0) break;
-        if (file.videoId && (inUseIds.has(file.videoId) || cachingTasks.has(file.videoId))) {
-            continue; // don't delete the file currently in use or being cached
-        }
-        try {
-            fs.unlinkSync(file.filePath);
-            bytesToFree -= file.stat.size;
-            console.log(`Deleted cached file to enforce size: ${path.basename(file.filePath)}`);
-        } catch (error) {
-            console.error('Error deleting cached file:', error);
-        }
-    }
+	let bytesToFree = totalBytes - MAX_CACHE_SIZE_BYTES;
+	for (const file of cacheFiles) {
+		if (bytesToFree <= 0) break;
+		if (file.videoId && (inUseIds.has(file.videoId) || cachingTasks.has(file.videoId))) {
+			continue; // don't delete the file currently in use or being cached
+		}
+		try {
+			fs.unlinkSync(file.filePath);
+			bytesToFree -= file.stat.size;
+			console.log(`Deleted cached file to enforce size: ${path.basename(file.filePath)}`);
+		} catch (error) {
+			console.error('Error deleting cached file:', error);
+		}
+	}
 }
 
 function runCacheMaintenance() {
-    try {
-        cleanupTempFiles();
-    } catch (error) {
-        console.error('Cache maintenance (temp) error:', error);
-    }
-    try {
-        enforceCacheSizeLimit();
-    } catch (error) {
-        console.error('Cache maintenance (size) error:', error);
-    }
+	try {
+		cleanupTempFiles();
+	} catch (error) {
+		console.error('Cache maintenance (temp) error:', error);
+	}
+	try {
+		enforceCacheSizeLimit();
+	} catch (error) {
+		console.error('Cache maintenance (size) error:', error);
+	}
 }
 
 function getPlayer(guildId: string) {
@@ -189,58 +311,53 @@ async function connectToChannel(channel: VoiceBasedChannel) {
 
 // Start a background caching job for a given YouTube video if not already cached or in progress
 function startBackgroundCaching(videoID: string, url: string) {
-    const cachedFilePath = path.join(cacheDir, `${videoID}.ogg`);
-    const tempFilePath = path.join(cacheDir, `${videoID}_temp.ogg`);
+	const cachedFilePath = path.join(cacheDir, `${videoID}.ogg`);
+	const tempFilePath = path.join(cacheDir, `${videoID}_temp.ogg`);
 
-    if (fs.existsSync(cachedFilePath) || cachingTasks.has(videoID)) {
-        return;
-    }
+	if (fs.existsSync(cachedFilePath) || cachingTasks.has(videoID)) {
+		return;
+	}
 
-    const task = new Promise<void>((resolve) => {
-        try {
-            const stream = ytdl(url, {
-                liveBuffer: 25000,
-                highWaterMark: 1024 * 1024 * 100,
-                quality: 'highestaudio',
-                filter: (format) => format.container === 'mp4',
-            });
+	const task = new Promise<void>((resolve) => {
+		try {
+			const stream = createYtDlpStream(url);
 
-            ffmpeg(stream)
-                .inputOptions(['-analyzeduration', '0'])
-                .format('ogg')
-                .audioCodec('libopus')
-                .audioBitrate('128k')
-                .on('error', (error: Error) => {
-                    console.error('FFmpeg cache error:', error);
-                    try {
-                        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-                    } catch {}
-                    cachingTasks.delete(videoID);
-                    resolve();
-                })
-                .on('end', () => {
-                    fs.rename(tempFilePath, cachedFilePath, (err) => {
-                        if (err) {
-                            console.error('Error finalizing cache file:', err);
-                        } else {
-                            console.log(`Caching complete for ${videoID}`);
-                        }
-                        cachingTasks.delete(videoID);
-                        resolve();
-                    });
-                })
-                .save(tempFilePath);
-        } catch (error) {
-            console.error('Background caching setup error:', error);
-            try {
-                if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-            } catch {}
-            cachingTasks.delete(videoID);
-            resolve();
-        }
-    });
+			ffmpeg(stream)
+				.inputOptions(['-analyzeduration', '0'])
+				.format('ogg')
+				.audioCodec('libopus')
+				.audioBitrate('128k')
+				.on('error', (error: Error) => {
+					console.error('FFmpeg cache error:', error);
+					try {
+						if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+					} catch {}
+					cachingTasks.delete(videoID);
+					resolve();
+				})
+				.on('end', () => {
+					fs.rename(tempFilePath, cachedFilePath, (err) => {
+						if (err) {
+							console.error('Error finalizing cache file:', err);
+						} else {
+							console.log(`Caching complete for ${videoID}`);
+						}
+						cachingTasks.delete(videoID);
+						resolve();
+					});
+				})
+				.save(tempFilePath);
+		} catch (error) {
+			console.error('Background caching setup error:', error);
+			try {
+				if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+			} catch {}
+			cachingTasks.delete(videoID);
+			resolve();
+		}
+	});
 
-    cachingTasks.set(videoID, task);
+	cachingTasks.set(videoID, task);
 }
 
 async function playNextSong(guildId: string) {
@@ -269,7 +386,13 @@ async function playNextSong(guildId: string) {
 
 	currentSongs.set(guildId, song);
 
-	const videoID = ytdl.getVideoID(song.url);
+	const videoID = getVideoIdFromUrl(song.url);
+	if (!videoID) {
+		console.error('Invalid YouTube URL:', song.url);
+		void playNextSong(guildId);
+		return;
+	}
+
 	const cachedFilePath = path.join(cacheDir, `${videoID}.ogg`);
 
 	const player = getPlayer(guildId);
@@ -300,12 +423,7 @@ async function playNextSong(guildId: string) {
 			// Start a background caching job and stream separately for playback
 			startBackgroundCaching(videoID, song.url);
 
-			const liveStream = ytdl(song.url, {
-				liveBuffer: 25000,
-				highWaterMark: 1024 * 1024 * 100,
-				quality: 'highestaudio',
-				filter: (format) => format.container === 'mp4',
-			});
+			const liveStream = createYtDlpStream(song.url);
 
 			const playbackOutput = new PassThrough();
 			ffmpeg(liveStream)
@@ -467,11 +585,11 @@ client.on(Events.MessageCreate, async (message) => {
 			}
 		} else {
 			// Single video
-			if (ytdl.validateURL(query)) {
+			if (validateYouTubeURL(query)) {
 				url = query;
 				// Get video info for title
-				const info = await ytdl.getInfo(url);
-				title = info.videoDetails.title;
+				const info = await getVideoInfo(url);
+				title = info?.title || 'Unknown Title';
 			} else {
 				// Search YouTube for the query
 				const video = await searchYouTube(query);
